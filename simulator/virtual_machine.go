@@ -146,6 +146,7 @@ func NewVirtualMachine(ctx *Context, parent types.ManagedObjectReference, spec *
 			SuspendDirectory:  dsPath,
 			LogDirectory:      dsPath,
 		},
+		VAppConfig: spec.VAppConfig,
 	}
 
 	// Add the default devices
@@ -335,9 +336,53 @@ func (vm *VirtualMachine) apply(spec *types.VirtualMachineConfigSpec) {
 }
 
 // updateVAppProperty updates the simulator VM with the specified VApp properties.
+func (vm *VirtualMachine) updateVAppProduct(spec *types.VmConfigSpec) types.BaseMethodFault {
+	products := make([]types.VAppProductInfo, 0)
+	if vm.Config.VAppConfig != nil && vm.Config.VAppConfig.GetVmConfigInfo() != nil {
+		products = vm.Config.VAppConfig.GetVmConfigInfo().Product
+	}
+
+	for _, product := range spec.Product {
+		var foundIndex int
+		exists := false
+
+		for i, p := range products {
+			if p.Key == product.Info.Key {
+				exists = true
+				foundIndex = i
+				break
+			}
+		}
+		switch product.Operation {
+		case types.ArrayUpdateOperationAdd:
+			if exists {
+				return new(types.InvalidArgument)
+			}
+			products = append(products, *product.Info)
+		case types.ArrayUpdateOperationEdit:
+			if !exists {
+				return new(types.InvalidArgument)
+			}
+			products[foundIndex] = *product.Info
+		case types.ArrayUpdateOperationRemove:
+			if !exists {
+				return new(types.InvalidArgument)
+			}
+			products = append(products[:foundIndex], products[foundIndex+1:]...)
+		}
+	}
+	if vm.Config.VAppConfig == nil {
+		vm.Config.VAppConfig = &types.VmConfigInfo{}
+	}
+
+	vm.Config.VAppConfig.GetVmConfigInfo().Product = products
+
+	return nil
+}
+
+// updateVAppProperty updates the simulator VM with the specified VApp properties.
 func (vm *VirtualMachine) updateVAppProperty(spec *types.VmConfigSpec) types.BaseMethodFault {
 	ps := make([]types.VAppPropertyInfo, 0)
-
 	if vm.Config.VAppConfig != nil && vm.Config.VAppConfig.GetVmConfigInfo() != nil {
 		ps = vm.Config.VAppConfig.GetVmConfigInfo().Property
 	}
@@ -465,6 +510,10 @@ func (vm *VirtualMachine) configure(ctx *Context, spec *types.VirtualMachineConf
 
 	if spec.VAppConfig != nil {
 		if err := vm.updateVAppProperty(spec.VAppConfig.GetVmConfigSpec()); err != nil {
+			return err
+		}
+
+		if err := vm.updateVAppProduct(spec.VAppConfig.GetVmConfigSpec()); err != nil {
 			return err
 		}
 	}
